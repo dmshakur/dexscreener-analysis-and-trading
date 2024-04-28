@@ -1,5 +1,4 @@
 from datetime import datetime
-from decimal import Decimal, getcontext
 import re
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -7,7 +6,6 @@ from bs4 import BeautifulSoup
 save_location = './dex_data/'
 time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-getcontext().prec = 30
 
 # Define CSS class selectors
 all_tokens_class = 'ds-dex-table-row ds-dex-table-row-new'
@@ -20,8 +18,10 @@ price_change_class = 'ds-table-data-cell ds-dex-table-row-col-price-change'
 base_class = 'ds-table-data-cell'
 
 cols = [
+    'token_name',
+    'token_symbol',
     'token_address',
-    'current_price',
+    'current_price_usd',
     'time',
     'age',
     'buys',
@@ -36,6 +36,17 @@ cols = [
     'fdv'
 ]
 
+def process_unformatted_number(num):
+    n = re.sub(r'\D', '', num)
+    if num[-1].lower() == 'k':
+        return float(n) * 1000.0
+    elif num[-1].lower() == 'm':
+        return float(n) * 1000000.0
+    elif int(num[-1]):
+        return float(n)
+    else:
+        return f"invalid value: {n}"
+
 def format_and_save_data(raw_html):
     df = pd.DataFrame(columns=cols)
     soup = BeautifulSoup(raw_html, 'lxml')
@@ -43,11 +54,10 @@ def format_and_save_data(raw_html):
 
     for token in all_tokens:
         basic_token_data = token.find(class_=token_class)
-        token_price = token.find(class_=price_class).get_text()
+        token_price = token.find(class_=price_class).get_text()[1:]
         age = token.find(class_=age_class).get_text()
         price_changes = [element.get_text() for element in token.find_all(class_=price_change_class)]
         remaining_data = [element.get_text() for element in token.find_all(class_=base_class)]
-        print(token_price[1:])
 
         # Structure data assuming each category has correct count of data
         token_data = pd.DataFrame([{
@@ -58,15 +68,15 @@ def format_and_save_data(raw_html):
             'time': time,
             'age': age,
             'buys': re.sub(r'\D', '', remaining_data[3]),
-            'sells': remaining_data[4],
-            'volume': remaining_data[5],
-            'makers': remaining_data[6],
-            'price_change_5m': price_changes[0],
-            'price_change_1h': price_changes[1],
-            'price_change_6h': price_changes[2],
-            'price_change_24h': price_changes[3],
-            'liquidity': remaining_data[-2],
-            'fdv': remaining_data[-1]
+            'sells': re.sub(r'\D', '', remaining_data[4]),
+            'volume': process_unformatted_number(remaining_data[5]),
+            'makers': re.sub(r'\D', '', remaining_data[6]),
+            'price_change_5m': re.sub(r'%|,', '', price_changes[0]),
+            'price_change_1h': re.sub(r'%|,', '', price_changes[1]),
+            'price_change_6h': re.sub(r'%|,', '', price_changes[2]),
+            'price_change_24h': re.sub(r'%|,', '', price_changes[3]),
+            'liquidity': process_unformatted_number(remaining_data[-2]),
+            'fdv': process_unformatted_number(remaining_data[-1])
         }])
         df = pd.concat([df, token_data], ignore_index=True)
 
