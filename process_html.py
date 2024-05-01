@@ -3,7 +3,9 @@ import re
 import pandas as pd
 from bs4 import BeautifulSoup
 
-save_location = './dex_data/'
+from manage_db import add_pair_address
+
+save_location = './data/'
 time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
@@ -47,7 +49,7 @@ def process_unformatted_number(num):
     else:
         return f"invalid value: {n}"
 
-def format_and_save_data(raw_html):
+def format_and_save_data(raw_html, collect_new_pairs = True):
     df = pd.DataFrame(columns=cols)
     soup = BeautifulSoup(raw_html, 'lxml')
     all_tokens = soup.find_all('a', class_=all_tokens_class)
@@ -59,11 +61,24 @@ def format_and_save_data(raw_html):
         price_changes = [element.get_text() for element in token.find_all(class_=price_change_class)]
         remaining_data = [element.get_text() for element in token.find_all(class_=base_class)]
 
+        # convert age to a numeric value representing seconds
+        age_split = age.split(' ')
+        age = 0
+
+        for x in age_split:
+            if x[-1].lower() == 'h':
+                age += int(x[:-1]) * 360
+            elif x[-1].lower() == 'm':
+                age += int(x[:-1]) * 60
+            elif x[-1].lower() == 's':
+                age += int(x[:-1])
+
+
         # Structure data assuming each category has correct count of data
         token_data = pd.DataFrame([{
             'token_name': basic_token_data.find('span', class_ = token_name_class).get_text(),
             'token_symbol': basic_token_data.find('span', class_ = token_symbol_class).get_text(),
-            'token_address': token['href'].split('/')[2],
+            'pair_address': token['href'].split('/')[2],
             'current_price_usd': token_price,
             'time': time,
             'age': age,
@@ -81,5 +96,12 @@ def format_and_save_data(raw_html):
         df = pd.concat([df, token_data], ignore_index=True)
 
     df.to_csv(f'{save_location}dxsc_newpairs_{time}.csv', index=False)
+
+    print('process_html.py ', collect_new_pairs, ' testing printing, since it doesn\'t seem to be working')
+    if collect_new_pairs:
+        new_addresses = df.loc[df['age'] < 300, 'pair_address']
+        print('new_addresses_df:\n', new_addresses)
+        add_pair_address(new_addresses)
+
     return df
 
