@@ -2,15 +2,10 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import threading
 
-from process_html import format_and_save_data
-from manage_db import collect_data_and_insert
+from collect_and_manage_data import collect_data_and_insert, format_and_save_data
 
 app = Flask(__name__)
-app.config['DEBUG'] = True
 CORS(app)  # Enable CORS for all routes and origins
-
-# Creating a queue and threads with a lock to ensure that only one process can access the database at the time
-#db_lock = threading.Lock()
 
 
 @app.route('/receive', methods=['POST'])
@@ -24,7 +19,6 @@ def receive_data():
         return jsonify({"message": "Failed to save HTML"}), 500
 
 
-
 if __name__ == '__main__':
     collection_thread = threading.Thread(
         target = collect_data_and_insert,
@@ -32,7 +26,6 @@ if __name__ == '__main__':
         daemon = True
     )
     collection_thread.start()
-    print('setting port')
     port = 3000
     app.run(port=port, debug=True)
 
