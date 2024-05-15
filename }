@@ -21,10 +21,11 @@ functions:
     format_and_save_data
 '''
 
+from threading import Lock
 from datetime import datetime
-import os
-import re
+import sqlite3
 import time
+import re
 
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -62,16 +63,21 @@ cols = [
 ]
 
 csv_save_path = './data/dxsc_newpair_data/'
-price_data_path = './data/token_price_data/'
-master_path = './data/master_token_data.csv'
+price_data_path = ''
+db_path = './data/historical_price_data_sol.csv'
 collection_path = './data/collection_addresses.csv'
 dexscreener_api = 'https://api.dexscreener.com/latest/dex/pairs/solana/'
 
+db_lock = Lock()
+
+def access_csv(data, access_type):
+    return
 
 
-def make_api_call(path: list[str] = collection_path, url: list[str] = dexscreener_api):
+def make_api_call(collection_path: list[str] = collection_path, url: list[str] = dexscreener_api):
     try:
-        df = pd.read_csv(path)
+        with open(collection_path) as file:
+            df = pd.read_csv(file)
 
         api_call = dexscreener_api + ','.join(df['pair_addresses'])
 
@@ -83,11 +89,13 @@ def make_api_call(path: list[str] = collection_path, url: list[str] = dexscreene
     except AssertionError as e:
         print('db_lock, releasing make_api_call')
         print(f'error: {e}')
-        return 'empty_file', None
+        return 'empty_db', None
 
 
 
 def collect_price_data():
+    # This function makes an api request gets the reponse data,
+    # and sends it to the add_data_to_db func
     while True:
         start_time = time.time()
 
@@ -101,70 +109,104 @@ def collect_price_data():
 
 
 
+def add_pair_address(address_data: pd.Series, path: list[str] = collection_addresses_db):
+    print('pre db_lock, add_pair_address')
+    db_lock.acquire(blocking = True)
 
-def add_collection_address(address_data: pd.Series, path: list[str] = collection_path):
-    if os.path.exists(path):
-        df = pd.read_csv(path)
-    else:
-        df = pd.DataFrame({'pair_address': []})
+    with sqlite3.connect(path) as conn:
+        cur = conn.cursor()
 
-    updated_df = pd.concat(
-        [df, address_data.to_frame(name = 'pair_address')],
-        ignore_index = True
-    )
+        for pair_address in address_data:
+            print(pair_address)
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS
+                collection_addresses (
+                    pair_address TEXT PRIMARY KEY
+                );
+            ''')
+            cur.execute('''
+                INSERT INTO
+                    collection_addresses
+                    (pair_address)
+                VALUES
+                    (?);
+            ''', (pair_address,))
+            conn.commit()
 
-    updated_df.to_csv(path)
+    db_lock.release()
+    print('db_lock, releasing add_pair_address')
 
 
 
-def add_data_to_db(data, date: list[str], path: list[str] = master_path, token_path: list[str] = price_data_path):
-    if data == 'empty_file':
+def remove_pair_address(address: list[str], path: list[str] = db_path):
+    db_lock.acquire(blocking = True)
+    print('db_lock acquired, remove_pair_address')
+
+    with sqlite3.connect(path) as conn:
+        cur = conn.cursor()
+
+        cur.execute(f'''
+            DELETE FROM collection_addresses
+            WHERE pair_address = "{address}";
+        ''')
+
+    db_lock.release()
+    print('db_lock, releasing remove_pair_address')
+
+
+def add_data_to_db(data, date: list[str], path: list[str] = db_path):
+    if data == 'empty_db':
         print('Database empty, ending iteration')
         return
 
-    # creating or loading dataframe 
-    if os.path.exists(path):
-        master_df = pd.read_csv(path)
-    else:
-        master_df = pd.DataFrame(
-            columns = [
-                'pair_address',
-                'name',
-                'symbol',
-                'buys',
-                'sells',
-                'dex_id'
-            ]
-        )
+    with sqlite3.connect(path) as conn:
+        cur = conn.cursor()
 
-    # creating a copy of the df to work with
-    updated_df = master_df.copy(deep = True)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS
+            pair_address_master (
+                pair_address TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dex_id TEXT NOT NULL
+            );
+        ''')
 
-    for pair in data['pairs']:
-        if 'pairAddress' in pair:
-            if pair['pairAddress'] not in master_df['pair_address'].values:
-                pair_data = {
-                    'pair_address': pair['pairAddress'],
-                    'name': pair['baseToken']['name'],
-                    'symbol': pair['baseToken']['symbol'],
-                    'dex_id': pair['dexId']
-                }
-                updated_df = updated_df.concat([updated_df, pair_data], ignore_index = True)
-
-        # creating or loading price dataframe
-        if os.path.exists():
-            token_df = pd.read_csv()
-        else:
-            token_df = pd.DataFrame(columns = ['price_data', 'time'])
-
-        # updating pricing data
-        updated_token_df = pd.concat([
-                token_df,
-                pd.DataFrame({'price_data': pair['priceUsd'], 'time': date})
-        ])
-        updated_token_df.to_csv()
-
-    updated_df.to_csv(path)
+        for pair in data['pairs']:
+            if 'pairAddress' in pair:
+                cur.execute(f'''
+                    SELECT 1
+                    FROM pair_address_master
+                    WHERE pair_address = "{pair["pairAddress"]}";
+                ''')
+                if not cur.fetchone():
+                    cur.execute(f'''
+                        INSERT INTO
+                            pair_address_master
+                            (pair_address, name, dex_id)
+                        VALUES (
+                            "{pair["pairAddress"]}",
+                            "{pair["baseToken"]["name"]}",
+                            "{pair["dexId"]}"
+                        );
+                    ''')
+                    conn.commit()
+            cur.execute(f'''
+                CREATE TABLE IF NOT EXISTS
+                "{pair["pairAddress"]}" (
+                    date DATE,
+                    price_usd REAL
+                );
+            ''')
+            cur.execute(f'''
+                INSERT INTO
+                    "{pair["pairAddress"]}"
+                    (date, price_usd)
+                VALUES (
+                    "{date}",
+                    {pair["priceUsd"]}
+                );
+            ''')
+            conn.commit()
 
 
 
@@ -236,6 +278,7 @@ def format_and_save_data(raw_html, collect_new_pairs = True):
     if collect_new_pairs:
         new_addresses = df.loc[df['age'] < 240, 'pair_address']
         print('new_addresses_df:\n', new_addresses, type(new_addresses))
-        add_collection_address(new_addresses)
+        add_pair_address(new_addresses)
 
     return df
+
