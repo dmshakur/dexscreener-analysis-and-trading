@@ -19,9 +19,15 @@ functions:
     remove_pair_address
     add_data_to_db
     format_and_save_data
+
+logging organization:
+    basic function calls
+    individual token price data that is collected 
+        and updated for prices and how much time since the last update
 '''
 
 from datetime import datetime
+import logging
 import os
 import re
 import time
@@ -29,6 +35,33 @@ import time
 from bs4 import BeautifulSoup
 import pandas as pd
 import requests
+
+
+
+# logging
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s')
+
+# logger 1
+# for recording function calls and the length of time that they take to execute
+logger_calls = logging.getLogger('logger')
+logger_calls.setLevel(logging.INFO)
+
+log_calls = logging.FileHandler('./data/logs/function_calls.log')
+log_calls.setLevel(logging.INFO)
+log_calls.setFormatter(formatter)
+
+logger_calls.addHandler(log_calls)
+
+# logger 2
+# for recording price updates
+logger_price = logging.getLogger('logger')
+logger_price.setLevel(logging.INFO)
+
+log_price = logging.FileHandler('./data/logs/price_upates.log')
+log_price.setLevel(logging.INFO)
+log_price.setFormatter(formatter)
+
+logger_price.addHandler(log_price)
 
 
 
@@ -61,6 +94,8 @@ cols = [
     'fdv'
 ]
 
+
+
 csv_save_path = './data/dxsc_newpair_data/'
 price_data_path = './data/token_price_data/'
 master_path = './data/master_token_data.csv'
@@ -70,19 +105,29 @@ dexscreener_api = 'https://api.dexscreener.com/latest/dex/pairs/solana/'
 
 
 def make_api_call(path: list[str] = collection_path, url: list[str] = dexscreener_api):
+    start_time = time.time()
+
     try:
-        df = pd.read_csv(path)
+        try:
+            df = pd.read_csv(path)
+        except Exception as _:
+            df = pd.DataFrame({'pair_addresses': []})
 
         api_call = dexscreener_api + ','.join(df['pair_addresses'])
 
         response = requests.get(api_call).json()
         date = datetime.now().isoformat()
 
+        end_time = time.time()
+        logger_calls.info(f'def make_api_call(), execution time: {start_time - end_time}')
+
         return response, date
 
-    except AssertionError as e:
-        print('db_lock, releasing make_api_call')
-        print(f'error: {e}')
+    except AssertionError as _:
+
+        end_time = time.time()
+        logger_calls.info(f'def make_api_call(), execution time: {start_time - end_time}, empty file')
+
         return 'empty_file', None
 
 
@@ -92,17 +137,18 @@ def collect_price_data():
         start_time = time.time()
 
         response, date = make_api_call()
-        add_data_to_db(response, date)
+        add_data(response, date)
 
         end_time = time.time()
-        print(f'collect_price_data execution time: {(end_time - start_time) * 1000} milliseconds')
+        logger_calls.info(f'def collect_price_data(), execution time: {start_time - end_time}')
 
         time.sleep(2)
 
 
 
-
 def add_collection_address(address_data: pd.Series, path: list[str] = collection_path):
+    start_time = time.time()
+
     if os.path.exists(path):
         df = pd.read_csv(path)
     else:
@@ -112,12 +158,16 @@ def add_collection_address(address_data: pd.Series, path: list[str] = collection
         [df, address_data.to_frame(name = 'pair_address')],
         ignore_index = True
     )
-
     updated_df.to_csv(path)
 
+    end_time = time.time()
+    logger_calls.info(f'def add_collection_address(), execution time: {start_time - end_time}, added {len(address_data)} addresses')
 
 
-def add_data_to_db(data, date: list[str], path: list[str] = master_path, token_path: list[str] = price_data_path):
+
+def add_data(data, date: list[str], path: list[str] = master_path, token_path: list[str] = price_data_path):
+    start_time = time.time()
+
     if data == 'empty_file':
         print('Database empty, ending iteration')
         return
@@ -159,12 +209,15 @@ def add_data_to_db(data, date: list[str], path: list[str] = master_path, token_p
 
         # updating pricing data
         updated_token_df = pd.concat([
-                token_df,
-                pd.DataFrame({'price_data': pair['priceUsd'], 'time': date})
+            token_df,
+            pd.DataFrame({'price_data': pair['priceUsd'], 'time': date})
         ])
         updated_token_df.to_csv()
 
     updated_df.to_csv(path)
+
+    end_time = time.time()
+    logger_calls.info(f'def add_data(), execution time: {start_time - end_time}')
 
 
 
@@ -182,13 +235,15 @@ def process_unformatted_number(num):
 
 
 def format_and_save_data(raw_html, collect_new_pairs = True):
+    start_time = time.time()
+
     df = pd.DataFrame(columns=cols)
     soup = BeautifulSoup(raw_html, 'lxml')
     all_tokens = soup.find_all('a', class_=all_tokens_class)
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     for token in all_tokens:
-        # separating the data for more specific data points
+        # using beautiful soup to separate data out from the soup object
         basic_token_data = token.find(class_=token_class)
         token_price = token.find(class_=price_class).get_text()[1:]
         age = token.find(class_=age_class).get_text()
@@ -198,7 +253,6 @@ def format_and_save_data(raw_html, collect_new_pairs = True):
         # convert age to a numeric value representing seconds
         age_split = age.split(' ')
         age = 0
-
         for x in age_split:
             if x[-1].lower() == 'h':
                 age += int(x[:-1]) * (60**2)
@@ -230,12 +284,15 @@ def format_and_save_data(raw_html, collect_new_pairs = True):
         df = pd.concat([df, token_data], ignore_index=True)
 
     # save data collected data to a csv file
-    df.to_csv(f'{csv_save_location}dxsc_newpairs_{current_time}.csv', index=False)
+    df.to_csv(f'{csv_save_path}dxsc_newpairs_{current_time}.csv', index=False)
 
-    # save coin data for any new coins in the database
+    # save coin data for any new coins to the csv file
     if collect_new_pairs:
         new_addresses = df.loc[df['age'] < 240, 'pair_address']
         print('new_addresses_df:\n', new_addresses, type(new_addresses))
         add_collection_address(new_addresses)
+
+    end_time = time.time()
+    logger_calls.info(f'def format_and_save_data(), execution time: {start_time - end_time}')
 
     return df
