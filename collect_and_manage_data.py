@@ -166,6 +166,7 @@ def add_collection_address(address_data: pd.Series, path: list[str] = collection
 
 
 def add_data(data, date: list[str], path: list[str] = master_path, token_path: list[str] = price_data_path):
+    # Adding new coin data to the csv
     start_time = time.time()
 
     if data == 'empty_file':
